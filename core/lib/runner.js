@@ -182,7 +182,7 @@ async function runner(script, payload, options, callback) {
     let pluginConfigScope = pluginConfig.scope || runnableScript.config.pluginsScope;
     let pluginPrefix = pluginConfigScope ? pluginConfigScope : "artillery-plugin-";
     let requireString = pluginPrefix + pluginName;
-    let Plugin, plugin, pluginErr;
+    let Plugin, plugin;
 
     requirePaths.forEach(function(rp) {
       try {
@@ -198,7 +198,6 @@ async function runner(script, payload, options, callback) {
         }
       } catch (err) {
         debug(err);
-        pluginErr = err;
       }
     });
 
@@ -277,11 +276,6 @@ function run(script, ee, options, runState, contextVars) {
       intermediate.avoidedScenario();
     } else {
       runScenario(script, intermediate, runState, contextVars);
-  phaser.on('arrival', function (spec) {
-    if (runState.pendingScenarios >= spec.maxVusers) {
-      intermediate.avoidedScenario();
-    } else {
-      runScenario(script, intermediate, runState);
     }
   });
   phaser.on("phaseStarted", function(spec) {
@@ -342,20 +336,8 @@ function runScenario(script, intermediate, runState, contextVars) {
   //
   if (!runState.compiledScenarios) {
     _.each(script.scenarios, function(scenario) {
-      if (typeof scenario.weight === 'undefined') {
+      if (!scenario.weight) {
         scenario.weight = 1;
-      } else {
-        debug(`scenario ${scenario.name} weight = ${scenario.weight}`);
-        const variableValues = Object.assign(
-          datafileVariables(script),
-          inlineVariables(script),
-          { $processEnvironment: process.env });
-
-        const w = engineUtil.template(
-          scenario.weight,
-          { vars: variableValues });
-        scenario.weight = isNaN(parseInt(w)) ? 0 : parseInt(w);
-        debug(`scenario ${scenario.name} weight has been set to ${scenario.weight}`);
       }
     });
 
@@ -461,15 +443,14 @@ function createContext(script, contextVars) {
       // skipHeaders = true), then row could = undefined
       let row = el.reader(el.data) || [];
       _.each(el.fields, function(fieldName, j) {
-        result[fieldName] = row[j];
+        result.vars[fieldName] = row[j];
       });
     });
   }
-  return result;
-}
 
-function inlineVariables(script) {
-  let result = {};
+  //
+  // inline variables
+  //
   if (script.config.variables) {
     _.each(script.config.variables, function(v, k) {
       let val;
@@ -478,38 +459,9 @@ function inlineVariables(script) {
       } else {
         val = v;
       }
-      result[k] = val;
+      result.vars[k] = val;
     });
   }
-  return result;
-}
-
-/**
- * Create initial context for a scenario.
- */
-function createContext(script) {
-  const INITIAL_CONTEXT = {
-    vars: {
-      target: script.config.target,
-      $environment: script._environment,
-      $processEnvironment: process.env
-    },
-    funcs: {
-      $randomNumber: $randomNumber,
-      $randomString: $randomString,
-      $template: input => engineUtil.template(input, { vars: result.vars })
-    }
-  };
-
-  let result = _.cloneDeep(INITIAL_CONTEXT);
-
-  // variables from payloads:
-  const variableValues1 = datafileVariables(script);
-  Object.assign(result.vars, variableValues1);
-  // inline variables:
-  const variableValues2 = inlineVariables(script);
-  Object.assign(result.vars, variableValues2);
-
   result._uid = uuid.v4();
   result.vars.$uuid = result._uid;
   return result;
