@@ -60,6 +60,7 @@ test('Capture - JSON', (t) => {
   });
 });
 
+
 test('Capture and save to attribute of an Object in context.vars - JSON', (t) => {
   const fn = path.resolve(__dirname, './scripts/captures3.json');
   const script = require(fn);

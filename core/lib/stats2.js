@@ -264,11 +264,16 @@ Stats.prototype.reset = function() {
   this._pendingRequests = 0;
   this._scenariosAvoided = 0;
   this._scenarioCounter = {};
+  this._scenariosAvoided = 0;
   return this;
 };
 
 Stats.prototype.free = function() {
   return this;
+};
+
+Stats.prototype.isEmpty = function () {
+  return this._generatedScenarios === 0;
 };
 
 function round(number, decimals) {

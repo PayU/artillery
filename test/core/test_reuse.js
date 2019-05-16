@@ -26,6 +26,9 @@ test('reuse', function(t) {
       }
     }
     expected *= weightedFlowLengths;
+    ee.on('beforeTestRequest', function(){
+      t.assert('should preform before requests in the \'before requests\' test', script === 'before requests');
+    });
     ee.on('stats', function(stats) {
       intermediate.push(stats.report());
     });
@@ -46,6 +49,7 @@ test('reuse', function(t) {
         'aggregate should have the expected number of latencies',
         report.latencies.length === expected
       );
+
       t.end();
     });
     ee.run();

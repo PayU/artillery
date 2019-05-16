@@ -23,13 +23,9 @@ const urlparse = require('url').parse;
 
 module.exports = HttpEngine;
 
-const DEFAULT_AGENT_OPTIONS = {
-  keepAlive: true,
-  keepAliveMsec: 1000
-};
-
 function HttpEngine(script) {
   this.config = script.config;
+
 
   // If config.http.pool is set, create & reuse agents for all requests (with
   // max sockets set). That's what we're done here.
@@ -124,15 +120,15 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
 
   if (requestSpec.parallel) {
     let steps = _.map(requestSpec.parallel, function(rs) {
-        return self.step(rs, ee, opts);
+      return self.step(rs, ee, opts);
     });
 
     return engineUtil.createParallel(
-        steps,
-        {
-          limitValue: requestSpec.limit
-        }
-      );
+      steps,
+      {
+        limitValue: requestSpec.limit
+      }
+    );
   }
 
   if (requestSpec.think) {
@@ -263,6 +259,7 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
           requestParams.uri = template(requestParams.uri, context);
         }
         if (requestParams.url) {
+          requestParams.requestEntryPath = params.url || params.uri;
           requestParams.url = template(requestParams.url, context);
         }
 
@@ -297,7 +294,7 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
               acc[k] = template(v, context);
               return acc;
             },
-          {});
+            {});
         }
 
 
@@ -342,10 +339,14 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
 
         requestParams.url = url;
 
-        if ((/^https/i).test(requestParams.url)) {
-          requestParams.agent = context._httpsAgent;
+        if (!self.pool) {
+          if ((/^https/i).test(requestParams.url)) {
+            requestParams.agent = context._httpsAgent;
+          } else {
+            requestParams.agent = context._httpAgent;
+          }
         } else {
-          requestParams.agent = context._httpAgent;
+          requestParams.pool = self.pool;
         }
 
         if (!requestParams.url.startsWith('http')) {
@@ -495,10 +496,10 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
         // callback:
         let maybeCallback;
         if (typeof requestParams.capture === 'object' ||
-            typeof requestParams.match === 'object' ||
-            requestParams.afterResponse ||
-            (typeof opts.afterResponse === 'object' && opts.afterResponse.length > 0) ||
-            process.env.DEBUG) {
+          typeof requestParams.match === 'object' ||
+          requestParams.afterResponse ||
+          (typeof opts.afterResponse === 'object' && opts.afterResponse.length > 0) ||
+          process.env.DEBUG) {
           maybeCallback = requestCallback;
         }
 
@@ -521,27 +522,28 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
 
             req.on('response', function updateLatency(res) {
               let code = res.statusCode;
+              let path = res.req.method + ' ' + requestParams.requestEntryPath;
               const endedAt = process.hrtime(startedAt);
               let delta = (endedAt[0] * 1e9) + endedAt[1];
               debugRequests('request end: %s', req.path);
-              ee.emit('response', delta, code, context._uid);
+              ee.emit('response', delta, code, context._uid, path);
             });
           }).on('end', function() {
-            context._successCount++;
+          context._successCount++;
 
-            if (!maybeCallback) {
-              callback(null, context);
-            } // otherwise called from requestCallback
-          }).on('error', function(err) {
-            debug(err);
+          if (!maybeCallback) {
+            callback(null, context);
+          } // otherwise called from requestCallback
+        }).on('error', function(err) {
+          debug(err);
 
-            // Run onError hooks and end the scenario
-            runOnErrorHooks(onErrorHandlers, config.processor, err, requestParams, context, ee, function(asyncErr) {
-              let errCode = err.code || err.message;
-              ee.emit('error', errCode);
-              return callback(err, context);
-            });
+          // Run onError hooks and end the scenario
+          runOnErrorHooks(onErrorHandlers, config.processor, err, requestParams, context, ee, function(asyncErr) {
+            let errCode = err.code || err.message;
+            ee.emit('error', errCode);
+            return callback(err, context);
           });
+        });
       }); // eachSeries
   };
 
@@ -550,25 +552,30 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
 
 HttpEngine.prototype.compile = function compile(tasks, scenarioSpec, ee) {
   let self = this;
+  let config = this.config;
+  let tls = config.tls || {};
 
   return function scenario(initialContext, callback) {
     initialContext._successCount = 0;
 
     initialContext._jar = request.jar();
+    let keepAliveMsec = 1000;
+    let maxSockets = 1;
+    if (self.config.http && self.config.http.maxSockets) {
+      maxSockets = self.config.http.maxSockets;
+    }
+    if (!self.pool) {
+      let agentOpts = {
+        keepAlive: true,
+        keepAliveMsecs: keepAliveMsec,
+        maxSockets: maxSockets,
+        maxFreeSockets: maxSockets
+      };
 
-    if (self.config.http && typeof self.config.http.pool !== 'undefined') {
-      // Reuse common agents (created in the engine instance constructor)
-      initialContext._httpAgent = self._httpAgent;
-      initialContext._httpsAgent = self._httpsAgent;
-    } else {
-      // Create agents just for this VU
-      const agentOpts = Object.assign(DEFAULT_AGENT_OPTIONS, {
-        maxSockets: 1,
-        maxFreeSockets: 1
-      });
       initialContext._httpAgent = new http.Agent(agentOpts);
       initialContext._httpsAgent = new https.Agent(agentOpts);
     }
+
 
     let steps = _.flatten([
       function zero(cb) {
