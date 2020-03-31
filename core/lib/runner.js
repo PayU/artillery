@@ -2,33 +2,33 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-"use strict";
+'use strict';
 
-const EventEmitter = require("events").EventEmitter;
-const path = require("path");
-const _ = require("lodash");
-const debug = require("debug")("runner");
-const debugPerf = require("debug")("perf");
-const uuid = require("uuid");
-const A = require("async");
-const Stats = require("./stats2");
-const JSCK = require("jsck");
-const tryResolve = require("try-require").resolve;
-const createPhaser = require("./phases");
-const createReader = require("./readers");
-const engineUtil = require("./engine_util");
-const wl = require("./weighted-pick");
-const { $randomNumber, $randomString, $uuid, $dateNow } = require("./template-strings");
+const EventEmitter = require('events').EventEmitter;
+const path = require('path');
+const _ = require('lodash');
+const debug = require('debug')('runner');
+const debugPerf = require('debug')('perf');
+const uuid = require('uuid');
+const A = require('async');
+const Stats = require('./stats2');
+const JSCK = require('jsck');
+const tryResolve = require('try-require').resolve;
+const createPhaser = require('./phases');
+const createReader = require('./readers');
+const engineUtil = require('./engine_util');
+const wl = require('./weighted-pick');
+const { $randomNumber, $randomString, $uuid, $dateNow } = require('./template-strings');
+
 const Engines = {
   http: {},
   ws: {},
   socketio: {}
 };
-let isAggregateReport = true;
 
 JSCK.Draft4 = JSCK.draft4;
 
-const schema = new JSCK.Draft4(require("./schemas/artillery_test_script.json"));
+const schema = new JSCK.Draft4(require('./schemas/artillery_test_script.json'));
 
 let contextFuncs = {
   $randomString,
@@ -51,15 +51,10 @@ function validate(script) {
 
 async function runner(script, payload, options, callback) {
   let opts = _.assign({
-      periodicStats: script.config.statsInterval || 10,
-      mode: script.config.mode || "uniform",
-      isAggregateReport: true
-    },
-    options);
-
-  if (opts.isAggregateReport === false) {
-    isAggregateReport = false;
-  }
+    periodicStats: script.config.statsInterval || 10,
+    mode: script.config.mode || 'uniform'
+  },
+  options);
 
   let warnings = {
     plugins: {
@@ -109,29 +104,29 @@ async function runner(script, payload, options, callback) {
   // load engines:
   //
   let runnerEngines = _.map(
-    Object.assign({}, Engines, runnableScript.config.engines),
-    function loadEngine(engineConfig, engineName) {
-      let moduleName = "artillery-engine-" + engineName;
-      try {
-        if (Engines[engineName]) {
-          moduleName = "./engine_" + engineName;
+      Object.assign({}, Engines, runnableScript.config.engines),
+      function loadEngine(engineConfig, engineName) {
+        let moduleName = 'artillery-engine-' + engineName;
+        try {
+          if (Engines[engineName]) {
+            moduleName = './engine_' + engineName;
+          }
+          let Engine = require(moduleName);
+          let engine = new Engine(runnableScript, ee, engineUtil);
+          engine.__name = engineName;
+          return engine;
+        } catch (err) {
+          console.log(
+              'WARNING: engine %s specified but module %s could not be loaded',
+              engineName,
+              moduleName);
+          console.log(err.stack);
+          warnings.engines[engineName] = {
+            message: 'Could not load',
+            error: err
+          };
         }
-        let Engine = require(moduleName);
-        let engine = new Engine(runnableScript, ee, engineUtil);
-        engine.__name = engineName;
-        return engine;
-      } catch (err) {
-        console.log(
-          "WARNING: engine %s specified but module %s could not be loaded",
-          engineName,
-          moduleName);
-        console.log(err.stack);
-        warnings.engines[engineName] = {
-          message: "Could not load",
-          error: err
-        };
       }
-    }
   );
 
   //
@@ -149,20 +144,20 @@ async function runner(script, payload, options, callback) {
   let requirePaths = [];
 
   let pro = null;
-  if (tryResolve("artillery-pro")) {
-    pro = require("artillery-pro");
+  if (tryResolve('artillery-pro')) {
+    pro = require('artillery-pro');
     requirePaths = requirePaths.concat(pro.getPluginPath());
   } else {
-    debug("Artillery Pro is not installed.");
+    debug('Artillery Pro is not installed.');
   }
 
-  requirePaths.push("");
+  requirePaths.push('');
 
   if (process.env.ARTILLERY_PLUGIN_PATH) {
-    requirePaths = requirePaths.concat(process.env.ARTILLERY_PLUGIN_PATH.split(":"));
+    requirePaths = requirePaths.concat(process.env.ARTILLERY_PLUGIN_PATH.split(':'));
   }
 
-  debug("require paths: ", requirePaths);
+  debug('require paths: ', requirePaths);
 
   runnableScript.config.plugins = runnableScript.config.plugins || {};
 
@@ -180,37 +175,44 @@ async function runner(script, payload, options, callback) {
 
   _.each(runnableScript.config.plugins, function tryToLoadPlugin(pluginConfig, pluginName) {
     let pluginConfigScope = pluginConfig.scope || runnableScript.config.pluginsScope;
-    let pluginPrefix = pluginConfigScope ? pluginConfigScope : "artillery-plugin-";
+    let pluginPrefix = pluginConfigScope ? pluginConfigScope : 'artillery-plugin-';
     let requireString = pluginPrefix + pluginName;
-    let Plugin, plugin;
+    let Plugin, plugin, pluginErr;
 
     requirePaths.forEach(function(rp) {
       try {
         Plugin = require(path.join(rp, requireString));
-        if (typeof Plugin === "function") {
+        if (typeof Plugin === 'function') {
           // Plugin interface v1
           plugin = new Plugin(runnableScript.config, ee);
           plugin.__name = pluginName;
-        } else if (typeof Plugin === "object" && typeof Plugin.Plugin === "function") {
+        } else if (typeof Plugin === 'object' && typeof Plugin.Plugin === 'function') {
           // Plugin interface 2+
           plugin = new Plugin.Plugin(runnableScript, ee, options);
           plugin.__name = pluginName;
         }
       } catch (err) {
         debug(err);
+        pluginErr = err;
       }
     });
 
     if (!Plugin || !plugin) {
-      console.log(
-        "WARNING: plugin %s specified but module %s could not be loaded",
-        pluginName,
-        requireString);
+      let msg;
+
+      if (pluginErr.code === 'MODULE_NOT_FOUND') {
+        msg = `WARNING: Plugin ${pluginName} specified but module ${requireString} could not be found (${pluginErr.code})`;
+      } else {
+        msg = `WARNING: Could not initialize plugin ${pluginName} (${pluginErr.message})`;
+      }
+
+      console.log(msg);
+
       warnings.plugins[pluginName] = {
-        message: "Could not load"
+        message: 'Could not load'
       };
     } else {
-      debug("Plugin %s loaded from %s", pluginName, requireString);
+      debug('Plugin %s loaded from %s', pluginName, requireString);
       runnerPlugins.push(plugin);
     }
   });
@@ -219,18 +221,18 @@ async function runner(script, payload, options, callback) {
     ee.run = function() {
       let runState = {
         pendingScenarios: 0,
-        pendingRequests: 0,
+        // pendingRequests: 0,
         compiledScenarios: null,
         scenarioEvents: null,
         picker: undefined,
         plugins: runnerPlugins,
         engines: runnerEngines
       };
-      debug("run() with: %j", runnableScript);
+      debug('run() with: %j', runnableScript);
       run(runnableScript, ee, opts, runState, contextVars);
     };
 
-    ee.stop = function(done) {
+    ee.stop = function (done) {
       // allow plugins to cleanup
       A.eachSeries(
         runnerPlugins,
@@ -258,10 +260,9 @@ async function runner(script, payload, options, callback) {
     resolve(ee);
   });
 
-  if (callback && typeof callback === "function") {
+  if (callback && typeof callback === 'function') {
     promise.then(callback.bind(null, null), callback);
   }
-
 
   return promise;
 }
@@ -271,44 +272,36 @@ function run(script, ee, options, runState, contextVars) {
   let aggregate = [];
 
   let phaser = createPhaser(script.config.phases);
-  phaser.on("arrival", function(spec) {
-    if (spec.maxVusers && runState.pendingScenarios >= spec.maxVusers) {
-      intermediate.avoidedScenario();
+  phaser.on('arrival', function (spec) {
+    if (runState.pendingScenarios >= spec.maxVusers) {
+      intermediate.counter('core.scenarios.skipped', 1);
     } else {
       runScenario(script, intermediate, runState, contextVars);
     }
   });
-  phaser.on("phaseStarted", function(spec) {
-    ee.emit("phaseStarted", spec);
+  phaser.on('phaseStarted', function(spec) {
+    ee.emit('phaseStarted', spec);
   });
-  phaser.on("phaseCompleted", function(spec) {
-    ee.emit("phaseCompleted", spec);
+  phaser.on('phaseCompleted', function(spec) {
+    ee.emit('phaseCompleted', spec);
   });
-  phaser.on("done", function() {
-    debug("All phases launched");
+  phaser.on('done', function() {
+    debug('All phases launched');
 
     const doneYet = setInterval(function checkIfDone() {
       if (runState.pendingScenarios === 0) {
-        if (runState.pendingRequests !== 0) {
-          debug("DONE. Pending requests: %s", runState.pendingRequests);
-        }
 
         clearInterval(doneYet);
         clearInterval(periodicStatsTimer);
 
-        if (!intermediate.isEmpty()) {
-          sendStats();
-          intermediate.free();
-        }
+        sendStats();
 
-        let aggregateReport = {};
-        if (isAggregateReport) {
-          aggregateReport = Stats.combine(aggregate).report();
-        }
-        return ee.emit("done", aggregateReport);
+        intermediate.free();
+
+        let aggregateReport = Stats.combine(aggregate).report();
+        return ee.emit('done', aggregateReport);
       } else {
-        debug("Pending requests: %s", runState.pendingRequests);
-        debug("Pending scenarios: %s", runState.pendingScenarios);
+        debug('Pending scenarios: %s', runState.pendingScenarios);
       }
     }, 500);
   });
@@ -317,11 +310,10 @@ function run(script, ee, options, runState, contextVars) {
 
   function sendStats() {
     intermediate._concurrency = runState.pendingScenarios;
-    intermediate._pendingRequests = runState.pendingRequests;
-    ee.emit("stats", intermediate.clone());
-    if (isAggregateReport) {
-      aggregate.push(intermediate.clone());
-    }
+    // intermediate._pendingRequests = runState.pendingRequests;
+    ee.emit('stats', intermediate.clone());
+    delete intermediate._entries;
+    aggregate.push(intermediate.clone());
     intermediate.reset();
   }
 
@@ -336,106 +328,93 @@ function runScenario(script, intermediate, runState, contextVars) {
   //
   if (!runState.compiledScenarios) {
     _.each(script.scenarios, function(scenario) {
-      if (!scenario.weight) {
+      if (typeof scenario.weight === 'undefined') {
         scenario.weight = 1;
+      } else {
+        debug(`scenario ${scenario.name} weight = ${scenario.weight}`);
+        const variableValues = Object.assign(
+          datafileVariables(script),
+          inlineVariables(script),
+          { $processEnvironment: process.env });
+
+        const w = engineUtil.template(
+          scenario.weight,
+          { vars: variableValues });
+        scenario.weight = isNaN(parseInt(w)) ? 0 : parseInt(w);
+        debug(`scenario ${scenario.name} weight has been set to ${scenario.weight}`);
       }
     });
 
     runState.picker = wl(script.scenarios);
 
     runState.scenarioEvents = new EventEmitter();
-    runState.scenarioEvents.on("counter", function(name, value) {
+    runState.scenarioEvents.on('counter', function(name, value) {
       intermediate.counter(name, value);
     });
-    runState.scenarioEvents.on("histogram", function(name, value) {
-      intermediate.addCustomStat(name, value);
-    });
     // TODO: Deprecate
-    runState.scenarioEvents.on("customStat", function(stat) {
-      intermediate.addCustomStat(stat.stat, stat.value);
+    runState.scenarioEvents.on('customStat', function(stat) {
+      intermediate.summary(stat.stat, stat.value);
     });
-    runState.scenarioEvents.on("started", function() {
+    runState.scenarioEvents.on('summary', function(name, value) {
+      intermediate.summary(name, value);
+    });
+    runState.scenarioEvents.on('histogram', function(name, value) {
+      intermediate.summary(name, value);
+    });
+    runState.scenarioEvents.on('rate', function(name) {
+      intermediate.rate(name);
+    });
+    runState.scenarioEvents.on('started', function() {
       runState.pendingScenarios++;
     });
-    runState.scenarioEvents.on("error", function(errCode) {
-      intermediate.addError(errCode);
-    });
-    runState.scenarioEvents.on("request", function() {
-      intermediate.newRequest();
-
-      runState.pendingRequests++;
-    });
-    runState.scenarioEvents.on("match", function() {
-      intermediate.addMatch();
-    });
-    runState.scenarioEvents.on("response", function(delta, code, uid, requestPath) {
-      intermediate.completedRequest();
-      intermediate.addLatency(delta);
-      intermediate.addCode(code);
-
-      let entry = [Date.now(), uid, delta, code, requestPath];
-      intermediate.addEntry(entry);
-
-      runState.pendingRequests--;
+    // TODO: Take an object so that it can have code, description etc
+    runState.scenarioEvents.on('error', function(errCode) {
+      intermediate.counter(`errors.${errCode}`, 1);
     });
 
     runState.compiledScenarios = _.map(
-      script.scenarios,
-      function(scenarioSpec) {
-        const name = scenarioSpec.engine || script.config.engine || "http";
-        const engine = runState.engines.find((e) => e.__name === name);
-        return engine.createScenario(scenarioSpec, runState.scenarioEvents);
-      }
+        script.scenarios,
+        function(scenarioSpec) {
+          const name = scenarioSpec.engine || script.config.engine || 'http';
+          const engine = runState.engines.find((e) => e.__name === name);
+          return engine.createScenario(scenarioSpec, runState.scenarioEvents);
+        }
     );
   }
 
   let i = runState.picker()[0];
 
-  debug("picking scenario %s (%s) weight = %s",
-    i,
-    script.scenarios[i].name,
-    script.scenarios[i].weight);
+  debug('picking scenario %s (%s) weight = %s',
+        i,
+        script.scenarios[i].name,
+        script.scenarios[i].weight);
 
-  intermediate.newScenario(script.scenarios[i].name || i);
+  intermediate.counter(`core.scenarios.created.${script.scenarios[i].name || i}`, 1);
+  intermediate.counter('core.scenarios.created.total', 1);
+  // intermediate.newScenario(script.scenarios[i].name || i);
 
   const scenarioStartedAt = process.hrtime();
   const scenarioContext = createContext(script, contextVars);
 
   const finish = process.hrtime(start);
   const runScenarioDelta = (finish[0] * 1e9) + finish[1];
-  debugPerf("runScenarioDelta: %s", Math.round(runScenarioDelta / 1e6 * 100) / 100);
+  debugPerf('runScenarioDelta: %s', Math.round(runScenarioDelta / 1e6 * 100) / 100);
   runState.compiledScenarios[i](scenarioContext, function(err, context) {
     runState.pendingScenarios--;
     if (err) {
       debug(err);
+      intermediate.counter('core.scenarios.failed', 1);
     } else {
+      intermediate.counter('core.scenarios.completed', 1);
       const scenarioFinishedAt = process.hrtime(scenarioStartedAt);
       const delta = (scenarioFinishedAt[0] * 1e9) + scenarioFinishedAt[1];
-      intermediate.addScenarioLatency(delta);
-      intermediate.completedScenario();
+      intermediate.histogram('core.scenarios.duration', delta/1e6);
     }
   });
 }
 
-/**
- * Create initial context for a scenario.
- */
-function createContext(script, contextVars) {
-  const INITIAL_CONTEXT_VARIABLES = {
-    target: script.config.target,
-    $environment: script._environment,
-    $processEnvironment: process.env
-  };
-  const CONTEXT_VARIABLES = contextVars ? contextVars : INITIAL_CONTEXT_VARIABLES;
-  const CONTEXT = {
-    vars: CONTEXT_VARIABLES,
-    funcs: contextFuncs
-  };
-  let result = _.cloneDeep(CONTEXT);
-
-  //
-  // variables from payloads
-  //
+function datafileVariables(script) {
+  let result = {};
   if (script.config.payload) {
     _.each(script.config.payload, function(el) {
 
@@ -443,14 +422,15 @@ function createContext(script, contextVars) {
       // skipHeaders = true), then row could = undefined
       let row = el.reader(el.data) || [];
       _.each(el.fields, function(fieldName, j) {
-        result.vars[fieldName] = row[j];
+        result[fieldName] = row[j];
       });
     });
   }
+  return result;
+}
 
-  //
-  // inline variables
-  //
+function inlineVariables(script) {
+  let result = {};
   if (script.config.variables) {
     _.each(script.config.variables, function(v, k) {
       let val;
@@ -459,9 +439,39 @@ function createContext(script, contextVars) {
       } else {
         val = v;
       }
-      result.vars[k] = val;
+      result[k] = val;
     });
   }
+  return result;
+}
+
+/**
+ * Create initial context for a scenario.
+ */
+function createContext(script, contextVars) {
+  const INITIAL_CONTEXT = {
+    vars: Object.assign(
+      {
+        target: script.config.target,
+        $environment: script._environment,
+        $processEnvironment: process.env
+      },
+      contextVars || {}),
+    funcs: {
+      ...contextFuncs,
+      $template: input => engineUtil.template(input, { vars: result.vars })
+    }
+  };
+
+  let result = _.cloneDeep(INITIAL_CONTEXT);
+
+  // variables from payloads:
+  const variableValues1 = datafileVariables(script);
+  Object.assign(result.vars, variableValues1);
+  // inline variables:
+  const variableValues2 = inlineVariables(script);
+  Object.assign(result.vars, variableValues2);
+
   result._uid = uuid.v4();
   result.vars.$uuid = result._uid;
   return result;
@@ -469,15 +479,15 @@ function createContext(script, contextVars) {
 
 function handleBeforeRequests(script, runnableScript, runnerEngines, testEvents) {
   let ee = new EventEmitter();
-  return new Promise(function(resolve, reject) {
-    ee.on("request", function() {
-      testEvents.emit("beforeTestRequest");
+  return new Promise(function(resolve, reject){
+    ee.on('request', function() {
+      testEvents.emit('beforeTestRequest');
     });
-    ee.on("error", function(error) {
-      testEvents.emit("beforeTestError", error);
+    ee.on('error', function(error) {
+      testEvents.emit('beforeTestError', error);
     });
 
-    let name = runnableScript.before.engine || "http";
+    let name = runnableScript.before.engine || 'http';
     let engine = runnerEngines.find((e) => e.__name === name);
     let beforeTestScenario = engine.createScenario(runnableScript.before, ee);
     let beforeTestContext = createContext(script);
