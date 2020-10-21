@@ -336,7 +336,7 @@ function runScenario(script, intermediate, runState, contextVars) {
   //
   if (!runState.compiledScenarios) {
     _.each(script.scenarios, function(scenario) {
-      if (!scenario.weight) {
+      if (typeof scenario.weight === 'undefined') {
         scenario.weight = 1;
       }
     });
